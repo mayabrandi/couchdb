@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """google_docs_get_run_info.py
 Created by Maya Brandi on 2012-06-05.
 """
@@ -10,12 +9,15 @@ import os
 import hashlib
 import couchdb
 import time
+from scilifelab.scripts.bcbb_helpers.process_run_info import _replace_ascii
+import bcbio.scilifelab.google.project_metadata as pm
+import bcbio.pipeline.config_loader as cl
+import logging
+from bcbio.google import _to_unicode
 
-
-
-def get_proj_inf(project_name,qc):
-         
-	credentials_file = '/bubo/home/h24/mayabr/config/gdocs_credentials'
+def get_proj_inf(project_name_swe,qc,credentials_file,config_file):
+	logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',datefmt='%Y-%m-%d',filename='ProjectSummary.log',level=logging.INFO)
+	project_name	 = _replace_ascii(_to_unicode(project_name_swe))
 	key  		 = hashlib.md5(project_name).hexdigest()
 
         obj={   'min_M_reads_per_sample_ordered':'',
@@ -27,85 +29,43 @@ def get_proj_inf(project_name,qc):
                 'entity_version': 0.1,
                 '_id': key}
 
-	mistakes = ["_"," _"," ",""]
 
 	# get minimal #M reads and uppnexid from Genomics Project list
-	print 'get minimal #M reads and uppnexid from Genomics Project list'
-	try:
-		ssheet  = "Genomics Project list"
-		wsheets = ["Finished 2011","Finished 2012","Ongoing"]
-		for wsheet in wsheets:
-			try:
-				content, ws_key, ss_key		= get_google_document(ssheet,wsheet,credentials_file)		
-				dummy, No_samps_colindex 	= get_column(content,'No of samples')
-				dummy, uppnex_ID_colindex 	= get_column(content,'Uppnex ID')
-				dummy, project_name_colindex 	= get_column(content,'Project name')
-				dummy, min_reads_colindex 	= get_column(content,'minimal M read pairs/sample (passed filter)')
-        			for j,row in enumerate(content):
-					try:
-						name = str(row[project_name_colindex]).strip()
-						if name == project_name:
-                					uppnexid  = str(row[uppnex_ID_colindex]).strip()
-                	        			min_reads = str(row[min_reads_colindex]).strip()
-							No_samps  = str(row[No_samps_colindex]).strip()
-							obj['min_M_reads_per_sample_ordered'] 	= min_reads
-							obj['Uppnex_id']    			= uppnexid
-							obj['No_of_samples'] 			= No_samps
-  							print 'yes'
-	      	               				break
-					except:
-						pass
-			except:
-				pass
-	except:
-		pass
-
-
-	# get costumer and Scilife Sample name from _20132_0*_Table for Sample Summary and Reception Control
-	print 'Trying to find Scilife Sample names from _20132_0*_Table for Sample Summary and Reception Control'
-	t  	= "_Table for Sample Summary and Reception Control"
-	t2	= " QC table for sample summary and reception control"
-	t3      = "_Table for Sample Summery and Reception Control"
-	versions=["01","02","03","04","05"]
-	for m in mistakes:
-		for v in versions:
-		 	if v == "05":
-				ssheet = str(project_name+m+"20132_"+v+t2)
-				wsheet = "Reception control"
-				header = 'SciLifeLab ID' 
-			elif v == "04":
-				ssheet = project_name+m+"20132_"+v+t2
-                                wsheet = "Reception control"
-				header = 'SciLifeLab ID'
-			elif v == "02":
-                                ssheet = project_name+m+"20132_"+v+t
-                                wsheet = "Sheet1" 
-				header = 'Sample name Scilife'
-			else:
-				
-				ssheet = project_name+m+"20132_"+v+t
-				wsheet = "Data"
-				header = 'Sample name Scilife (Index included)'
-                                try: #	special case
-                                        content, ws_key, ss_key = get_google_document(project_name+m+"20132_"+v+t3, wsheet, credentials_file)
-					check=1
-					break
-                                except:
-                                        pass
-			try:
-                		content, ws_key, ss_key = get_google_document(ssheet, wsheet, credentials_file)
-				check=1
-				break
-        		except:   
-				check=0
-				pass 
-
-		if check == 1:
-			break
-	if check == 1:
-		print 'Google document found!'
+	print '\nGetting minimal #M reads and uppnexid from Genomics Project list for project ' + project_name_swe
+	config = cl.load_config(config_file)
+	p = pm.ProjectMetaData(project_name,config)
+	if p.project_name==None:
+		p = pm.ProjectMetaData(project_name_swe,config)
+	if p.project_name==None:
+		print project_name+' not found in genomics project list'
+		logging.warning(str('Google Document Genomics Project list: '+project_name+' not found'))
 	else:
-		print 'Google document NOT found'
+                obj['min_M_reads_per_sample_ordered'] = p.min_reads_per_sample
+                obj['Uppnex_id']                      = p.uppnex_id
+                obj['No_of_samples']                  = p.no_samples
+
+
+
+	# get costumer and Scilife Sample name from _20132_0X_Table for Sample Summary and Reception Control
+	print '\nTrying to find Scilife Sample names from '+project_name_swe+'_20132_0X_Table for Sample Summary and Reception Control'
+
+       	versions = { 	"01":["Data",'Sample name Scilife (Index included)'],
+			"02":["Sheet1",'Sample name Scilife'],
+			"04":["Reception control",'SciLifeLab ID'],
+			"05":["Reception control",'SciLifeLab ID']}
+	client	= make_client(credentials_file)
+	feed 	= bcbio.google.spreadsheet.get_spreadsheets_feed(client,project_name_swe+'_20132', False) #FIXA: Hantera mistakes
+	if len(feed.entry) == 0:
+    		ssheet=None
+		logging.warning("Google Document %s: Could not find spreadsheet" % str(project_name_swe+'_20132_XXX'))
+		print "Could not find spreadsheet" 
+	else:
+    		ssheet	= feed.entry[0].title.text
+  		version	= ssheet.split('_20132_')[1].split(' ')[0].split('_')[0]
+		wsheet 	= versions[version][0]
+		header 	= versions[version][1]
+		content, ws_key, ss_key = get_google_document(ssheet, wsheet, credentials_file)
+
 	try:    
 	   	dummy, customer_names_colindex 	= get_column(content,'Sample name from customer')
 		row_ind, scilife_names_colindex = get_column(content, header)
@@ -120,8 +80,7 @@ def get_proj_inf(project_name,qc):
 		print 'Names found'
 		for key in scilife_names:
 			try:
-				print 'name '+key+' was striped to '+ scilife_names[key]
-				obj['samples'][scilife_names[key]] = {'customer_name': info[key], 'scilife_name':scilife_names[key]}
+				obj['samples'][scilife_names[key]] = {'customer_name': info[key], 'scilife_name':key} #'scilife_name':scilife_names[key]}
 			except:
 				pass
         except:
@@ -129,17 +88,23 @@ def get_proj_inf(project_name,qc):
                 pass
 
 	# get Sample Status from _20158_01_Table for QA HiSeq2000 sequencing results for samples
-	print 'Getting Sample Status from _20158_0*_Table for QA HiSeq2000 sequencing results for samples'
+	print '\nGetting Sample Status from '+project_name_swe+'_20158_0X_Table for QA HiSeq2000 sequencing results for samples'
+	mistakes = ["_"," _"," ",""]
+	found='FALSE'
 	for m in mistakes:
-		ssheet = project_name + m + "20158_01_Table for QA HiSeq2000 sequencing results for samples"
+		ssheet = project_name_swe + m + "20158_01_Table for QA HiSeq2000 sequencing results for samples"
 	        wsheet = "Sheet1"
 		try:
 			content, ws_key, ss_key = get_google_document(ssheet,wsheet,credentials_file)
-			print 'Google document found!'
+			found='TRUE'
 			break
                 except:
-			print 'Google document NOT found'
 			pass
+	if found:
+		print 'Google document found!'
+	else:
+		print 'Google document NOT found!'
+		logging.warning("Google Document %s: Could not find spreadsheet" % str(project_name_swe+'_20158_XXX'))
 	try:
 	       	dummy, P_NP_colindex 			= get_column(content,'Passed=P/ not passed=NP*')
 		dummy, No_reads_sequenced_colindex 	= get_column(content,'Total reads per sample')
@@ -160,17 +125,17 @@ def get_proj_inf(project_name,qc):
                         	        obj['samples'][scilife_name]['M_reads_sequenced'] = info[key][1]
                         	else:
                                 	obj['samples'][scilife_name] = {'status':info[key][0],'M_reads_sequenced':info[key][1]}
-				print key+' '+info[key][0]+' '+info[key][1]
 			except:
 				pass
         except:
-		print 'Status and M_reads_sequenced not found'
+		print 'Status and M reads sequenced not found in '+project_name_swe+'_20158_0X_Table for QA HiSeq2000 sequencing results for samples'
+		logging.warning("Google Document %s: Status and M reads sequenced not found" % str(project_name_swe+'_20158_XXX'))
                 pass
 
 
 	# get _id for SampleQCMetrics   
 	#	use couchdb views instead.... To be fixed...
-	print 'get _id for SampleQCMetrics'
+	print '\nGetting _id for SampleQCMetrics'
 	info={}
         for key in qc:
                 try:
@@ -187,6 +152,9 @@ def get_proj_inf(project_name,qc):
     	scilife_names = strip_scilife_name(info.keys())
 	if len(info.keys())>0:
 		print 'SampleQCMetrics found on couchdb for the folowing samples:'
+	else:
+		print 'no SampleQCMetrics found on couchdb for project '+ project_name
+		logging.warning(str('CouchDB: No SampleQCMetrics found for project '+ project_name))
         for key in scilife_names:
         	scilife_name=scilife_names[key]
                 if obj['samples'].has_key(scilife_name):
@@ -197,28 +165,23 @@ def get_proj_inf(project_name,qc):
              	else:
                      	obj['samples'][scilife_name]={"SampleQCMetrics":[info[key]]}
 
-		print key+' '+info[key]
-	print obj
 	return obj
 
-
+#		GOOGLE DOCS
 def get_google_document(ssheet_title,wsheet_title,credentials_file):
 	""""""
-	credentials = bcbio.google.get_credentials({'gdocs_upload': {'gdocs_credentials': credentials_file}})
-	client 	= bcbio.google.spreadsheet.get_client(credentials)
+	client  = make_client(credentials_file)
 	ssheet 	= bcbio.google.spreadsheet.get_spreadsheet(client,ssheet_title)
-        if ssheet is None:
-		f=open('fail_to_find_on_google_docs.txt','a')
-                f.write(ssheet_title+"\n")
-		f.close()
-	assert ssheet is not None, "Could not find spreadsheet '%s'" % ssheet_title
 	wsheet 	= bcbio.google.spreadsheet.get_worksheet(client,ssheet,wsheet_title)
-	assert wsheet is not None, "Could not find worksheet %s within spreadsheet %s" % (wsheet_title,ssheet_title)
 	content = bcbio.google.spreadsheet.get_cell_content(client,ssheet,wsheet)
 	ss_key 	= bcbio.google.spreadsheet.get_key(ssheet)
 	ws_key 	= bcbio.google.spreadsheet.get_key(wsheet)
 	return content, ws_key, ss_key
 
+def make_client(credentials_file):
+        credentials = bcbio.google.get_credentials({'gdocs_upload': {'gdocs_credentials': credentials_file}})
+        client  = bcbio.google.spreadsheet.get_client(credentials)
+        return client
 
 def get_column(ssheet_content,header):
 	""""""
@@ -235,21 +198,36 @@ def get_column(ssheet_content,header):
 			rowindex = j-1
 			return rowindex, colindex
 
-
-def save_obj(db, obj):
+#		COUCHDB
+def save_couchdb_obj(db, obj):
+    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',datefmt='%Y-%m-%d',filename='ProjectSummary.log',level=logging.INFO)
     dbobj = db.get(obj['_id'])
     if dbobj is None:
         obj["creation_time"] = time.strftime("%x %X")
         obj["modification_time"] = time.strftime("%x %X")
         db.save(obj)
+	logging.info('CouchDB: '+obj['_id'] + ' ' + obj['Project_id'] + ' Created ')
     else:
         obj["_rev"] = dbobj.get("_rev")
-        if obj != dbobj:
-            obj["creation_time"] = dbobj["creation_time"]
+	del dbobj["modification_time"]
+	obj["creation_time"] = dbobj["creation_time"]
+        if comp_obj(obj,dbobj)==False:    
+	    print "uppdating couchdb"
             obj["modification_time"] = time.strftime("%x %X")
             db.save(obj)
-    return True
+	    logging.info('CouchDB: '+obj['_id'] + ' ' + obj['Project_id'] + ' Uppdated ')
 
+def comp_obj(obj,dbobj):
+	for key in dbobj:
+		if (obj.has_key(key)):
+			if (obj[key]!=dbobj[key]):
+	                     return False
+	     	else:
+			return False
+	return True
+
+
+#		NAME HANDELING
 
 def strip_scilife_name(names):
         preps = ['_B','B','_C','C','_D','D','_E','E']
@@ -278,54 +256,36 @@ def strip_scilife_name(names):
 		return N3
 
 
-def  main2():
-        credentials_file = '/bubo/home/h24/mayabr/config/gdocs_credentials'
-        ssheet  = "Genomics Project list"
-        wsheet  = "Ongoing"
+def  main(credentials_file,config_file, proj_ID = None):
+	client	= make_client(credentials_file)
         couch   = couchdb.Server("http://maggie.scilifelab.se:5984")
         qc      = couch['qc']
-
-        f1=open('log1.txt','w')
-        f2=open('log2.txt','w')
-
-        content, ws_key, ss_key = get_google_document(ssheet,wsheet,credentials_file)
-        project_name_rowindex, project_name_colindex = get_column(content,'Project name')        
-        for j,row in enumerate(content):
-      		try:
-	        	name = str(row[project_name_colindex]).strip().split(' ')[0]
-			if (name !='') & (j>project_name_rowindex):
-				print 'Project: '+name 
-                       		obj     = get_proj_inf(name,qc)
-        			if obj['samples'].keys()!=[]:
-                			save_obj(qc, obj)
-                			#import simple_couch
-                			#simple_couch.fun(obj['_id'])
-                			print >> f1,obj['_id']+' '+name
-					print 'couchdb uppdated'
-        			else:
-					print 'couchdb NOT uppdated with this project since no data was found'
-                			print >> f2,name
-		except:
-			pass
-	f1.close()
-	f2.close()
-
-def main(proj_ID):
-        couch   = couchdb.Server("http://maggie.scilifelab.se:5984")
-        qc      = couch['qc']
-	obj     = get_proj_inf(proj_ID,qc)
-        if obj['samples'].keys()!=[]:
-                save_obj(qc, obj)
-		#import simple_couch
-		#simple_couch.fun(obj['_id'])
-                return proj_ID+' '+obj['_id']
-        else:
-		return proj_ID
-
-
+	if proj_ID==None:
+	        feed = bcbio.google.spreadsheet.get_spreadsheets_feed(client,'20132', False)
+	        try:
+        	        for ssheet in feed.entry:
+                	        proj_ID = ssheet.title.text.split('_20132')[0].lstrip().rstrip().rstrip('_')
+                        	if (proj_ID !=''):
+                                	try:
+                                        	obj = get_proj_inf(proj_ID ,qc ,credentials_file, config_file )
+                                        	if obj['samples'].keys()!=[]:
+                                        	        save_couchdb_obj(qc, obj)
+                                	except:
+                                        	pass
+        	except:
+	               	pass
+	else:
+	        obj = get_proj_inf(proj_ID ,qc ,credentials_file, config_file )
+        	if obj['samples'].keys()!=[]:
+                	save_couchdb_obj(qc, obj)
 
 if __name__ == '__main__':
+	credentials_file = '/bubo/home/h24/mayabr/config/gdocs_credentials'
+	config_file='/bubo/home/h24/mayabr/config/post_process.yaml'
 	if len(sys.argv)>1:
-		print main(sys.argv[1])
+		main(credentials_file,config_file,sys.argv[1])
 	else:
-		main2()
+		main(credentials_file,config_file)
+
+
+
