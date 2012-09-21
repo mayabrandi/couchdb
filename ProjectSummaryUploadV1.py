@@ -311,8 +311,12 @@ def  main(credentials_file,config_file, proj_ID = None):
 
 
 if __name__ == '__main__':
-	credentials_file = '/bubo/home/h24/mayabr/config/gdocs_credentials'
-	config_file='/bubo/home/h24/mayabr/config/post_process.yaml'
+#	credentials_file = 	'$HOME/config/gdocs_credentials'
+#	config_file=		'$HOME/config/post_process.yaml'
+
+        credentials_file = os.environ['HOME']+'/opt/config/gdocs_credentials'
+        config_file=os.environ['HOME']+'/opt/config/post_process.yaml'
+
 	if len(sys.argv)>1:
 		main(credentials_file,config_file,sys.argv[1])
 	else:
