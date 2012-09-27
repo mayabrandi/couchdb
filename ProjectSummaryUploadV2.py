@@ -1,7 +1,9 @@
 #!/usr/bin/env python
-"""google_docs_get_run_info.py
-Created by Maya Brandi on 2012-06-05.
 """
+ProjectSummaryUploadV2
+Created by Maya Brandi on 2012-09-00.
+"""
+from uuid import uuid4
 import bcbio.google
 import bcbio.google.spreadsheet
 import sys
@@ -9,44 +11,50 @@ import os
 import hashlib
 import couchdb
 import time
+from  datetime  import  datetime
 from scilifelab.scripts.bcbb_helpers.process_run_info import _replace_ascii
 import bcbio.scilifelab.google.project_metadata as pm
 import bcbio.pipeline.config_loader as cl
 import logging
 from bcbio.google import _to_unicode
 
-def get_proj_inf(project_name_swe,qc,credentials_file,config_file):
-	logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',filename='ProjectSummary.log',level=logging.INFO)#,datefmt='%Y-%m-%d'
+def get_proj_inf(project_name_swe,samp_db,proj_db,credentials_file,config_file):
+	logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',filename='proj_coucdb.log',level=logging.INFO)
 	project_name	 = _replace_ascii(_to_unicode(project_name_swe))
-	key  		 = hashlib.md5(project_name).hexdigest()
-	print key
-        obj={   'Application':'',
-		'Min_M_reads_per_sample_ordered':'',
-		'No_of_samples':'',
-                'Entity_type': 'ProjectSummary',
-                'Uppnex_id': '',                 
-		'Samples': {},
-                'Project_id': project_name, 
-                'Entity_version': 0.1,
+	key		= find_proj_from_view(proj_db,project_name)
+	if not key:
+		key = uuid4().hex
+
+        obj={   'application':'',
+		'customer_reference':'',
+		'min_m_reads_per_sample_ordered':'',
+		'no_of_samples':'',
+                'entity_type': 'project_summary',
+                'uppnex_id': '',                 
+		'samples': {},
+                'project_id': project_name, 
                 '_id': key}
 
-	logging.warning(str('Proj '+project_name+' '+ key))
+	logging.info(str('Handling proj '+project_name+' '+ key))
+	print key	
+
 
 	### Get minimal #M reads and uppnexid from Genomics Project list
 	print '\nGetting minimal #M reads and uppnexid from Genomics Project list for project ' + project_name_swe
+
 	config = cl.load_config(config_file)
 	p = pm.ProjectMetaData(project_name,config)
 	if p.project_name==None:
 		p = pm.ProjectMetaData(project_name_swe,config)
 	if p.project_name==None:
 		print project_name+' not found in genomics project list'
-		logging.warning(str('Google Document Genomics Project list: '+project_name+' not found'))
+		logging.warning(str('Google Document Genomics Project list: '+project_name+' not found')) 
 	else:
-                obj['Min_M_reads_per_sample_ordered'] = p.min_reads_per_sample
-                obj['Uppnex_id']                      = p.uppnex_id
-                obj['No_of_samples']                  = p.no_samples
-		obj['Application']		      = p.application
-
+                obj['min_m_reads_per_sample_ordered'] = float(p.min_reads_per_sample)
+                obj['uppnex_id']                      = p.uppnex_id
+                obj['no_of_samples']                  = int(p.no_samples)
+		obj['application']		      = p.application
+		obj['customer_reference']             = p.customer_reference
 
 
 	### Get costumer and Scilife Sample name from _20132_0X_Table for Sample Summary and Reception Control
@@ -54,7 +62,7 @@ def get_proj_inf(project_name_swe,qc,credentials_file,config_file):
 
        	versions = { 	"01":["Data",'Sample name Scilife (Index included)'],
 			"02":["Sheet1",'Sample name Scilife'],
-			"04":["Reception control",'SciLifeLab ID'],
+			"04":["Reception control",'Complete sample name'],
 			"05":["Reception control",'SciLifeLab ID']}
 
 	# Load google document
@@ -79,13 +87,16 @@ def get_proj_inf(project_name_swe,qc,credentials_file,config_file):
                 for j,row in enumerate(content):
 			if (j > row_ind):
 				try:
-					info[str(row[scilife_names_colindex]).strip().replace('-','_')] = str(row[customer_names_colindex]).strip()
+					cust_name = str(row[customer_names_colindex]).strip()
+					sci_name  = str(row[scilife_names_colindex]).strip().replace('-','_')
+					if cust_name != '':
+						info[sci_name] = cust_name
 				except:
 					pass
 		print 'Names found'
 		for scilife_name in info:
 			try:
-				obj['Samples'][scilife_name] = {'customer_name': info[scilife_name], 'scilife_name':scilife_name}
+				obj['samples'][scilife_name] = {'customer_name': info[scilife_name], 'scilife_name':scilife_name}
 			except:
 				pass
         except:
@@ -98,6 +109,7 @@ def get_proj_inf(project_name_swe,qc,credentials_file,config_file):
         versions = {    "01":['Sample name Scilife',"Total reads per sample","Passed=P/ not passed=NP*"],
                         "02":["Sample name (SciLifeLab)","Total number of reads (Millions)","Based on total number of reads"],
                         "03":["Sample name (SciLifeLab)","Total number of reads (Millions)","Based on total number of reads"]}
+
         # Load google document
 	mistakes = ["_"," _"," ",""]
 	found='FALSE'
@@ -121,6 +133,7 @@ def get_proj_inf(project_name_swe,qc,credentials_file,config_file):
 	else:
 		print 'Google document NOT found!'
 		logging.warning("Google Document %s: Could not find spreadsheet" % str(project_name_swe+'_20158_XXX'))
+
 	# Get status etc from loaded document
 	try:
 		dummy, P_NP_colindex 			= get_column(content,versions[version][2])
@@ -130,68 +143,57 @@ def get_proj_inf(project_name_swe,qc,credentials_file,config_file):
                 for j,row in enumerate(content):
 			if ( j > row_ind ):
 				try:
-					info[str(row[scilife_names_colindex]).strip()]=[str(row[P_NP_colindex]).strip(),str(row[No_reads_sequenced_colindex]).strip()]
+                                        sci_name=str(row[scilife_names_colindex]).strip()
+                                        no_reads=str(row[No_reads_sequenced_colindex]).strip()
+                                        if sci_name[-1]=='F':
+                                                status='P'
+                                        else:
+                                                status=str(row[P_NP_colindex]).strip()
+                                        info[sci_name]=[status,no_reads]
 				except:
 					pass
-		scilife_names 	= strip_scilife_name_prep(info.keys())
+		scilife_names 	= strip_scilife_name(info.keys())
 		duplicates	= find_duplicates(scilife_names.values())
-		print duplicates
 		for key in scilife_names:
 			striped_scilife_name = scilife_names[key]
-			print striped_scilife_name
 			try:
 				if striped_scilife_name in duplicates:
-					obj['Samples'][striped_scilife_name] = {'status':'inconsistent','M_reads_sequenced':'inconsistent'}
-                		elif obj['Samples'].has_key(striped_scilife_name):
-                        		obj['Samples'][striped_scilife_name]['status']            = info[key][0]
-                        	        obj['Samples'][striped_scilife_name]['M_reads_sequenced'] = info[key][1]
+					obj['samples'][striped_scilife_name] = {'status':'inconsistent','m_reads_sequenced':'inconsistent'}
+                		elif obj['samples'].has_key(striped_scilife_name):
+                        		obj['samples'][striped_scilife_name]['status']            = info[key][0]
+                        	        obj['samples'][striped_scilife_name]['m_reads_sequenced'] = info[key][1]
 			except:
 				pass
         except:
 		print 'Status and M reads sequenced not found in '+project_name_swe+'_20158_0X_Table for QA HiSeq2000 sequencing results for samples'
-		logging.warning("Google Document %s: Status and M reads sequenced not found" % str(project_name_swe+'_20158_XXX'))
                 pass
 
 
-	### Get _id for SampleQCMetrics and bcbb names  
-	#	use couchdb views instead.... To be fixed...
+	### Get _id for SampleQCMetrics and bcbb names -- use couchdb views instead.... To be fixed...
 	print '\nGetting _id for SampleQCMetrics'
+
 	info={}
-        for key in qc:
-                try:
-                        SampQC = qc.get(key)
+        for key in samp_db:
+		SampQC = samp_db.get(key)
+                if SampQC.has_key("entity_type"):
                         if (SampQC["entity_type"] == "SampleQCMetrics") & SampQC.has_key("sample_prj"):
                                 if SampQC["sample_prj"] == project_name:
-					try:
-						info[str(SampQC["barcode_name"]).strip()]=[SampQC["_id"],SampQC["name"]]
-                                        except:
-						pass
+					info[SampQC["_id"]]=[str(SampQC["name"]).strip(),SampQC["barcode_name"]]
 
-		except:
-			pass
-    	scilife_names = strip_scilife_name_prep(info.keys())
 	if len(info.keys())>0:
 		print 'SampleQCMetrics found on couchdb for the folowing samples:'
-		print info.keys()
-		print scilife_names
+		print info.values()
 	else:
 		print 'no SampleQCMetrics found on couchdb for project '+ project_name
 		logging.warning(str('CouchDB: No SampleQCMetrics found for project '+ project_name))
-        for key in scilife_names:
-        	scilife_name=scilife_names[key]
-                if obj['Samples'].has_key(scilife_name):
-        		if obj['Samples'][scilife_name].has_key("SampleQCMetrics"):
-				print info[key][0]
-				print "SampleQCMetricsSampleQCMetricsSampleQCMetrics"
-                		obj['Samples'][scilife_name]["SampleQCMetrics"].append(info[key][0])
-                        else:
-                              	obj['Samples'][scilife_name]["SampleQCMetrics"] = [info[key][0]]
-                if obj['Samples'].has_key(scilife_name):
-                        if obj['Samples'][scilife_name].has_key("bcbb_names"):
-                                obj['Samples'][scilife_name]["bcbb_names"].append(info[key][1])
-                        else:
-                                obj['Samples'][scilife_name]["bcbb_names"] = [info[key][1]]
 
+        for key in info:
+        	scilife_name=strip_scilife_name([info[key][1]])[info[key][1]]
+                if obj['samples'].has_key(scilife_name):
+        		if obj['samples'][scilife_name].has_key("sample_run_metrics"):
+                		obj['samples'][scilife_name]["sample_run_metrics"][info[key][0]]=key
+                        else:
+                              	obj['samples'][scilife_name]["sample_run_metrics"] = {info[key][0]:key}
 	return obj
 
 #		GOOGLE DOCS
@@ -230,22 +232,23 @@ def get_column(ssheet_content,header):
 
 #		COUCHDB
 def save_couchdb_obj(db, obj):
-    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',filename='ProjectSummary.log',level=logging.INFO)#,datefmt='%Y-%m-%d'
-    dbobj = db.get(obj['_id'])
+    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',filename='proj_coucdb.log',level=logging.INFO)
+    dbobj	= db.get(obj['_id'])
+    time_log 	= datetime.utcnow().isoformat() + "Z"
     if dbobj is None:
-        obj["creation_time"] = time.strftime("%x %X")
-        obj["modification_time"] = time.strftime("%x %X")
+        obj["creation_time"] 	 = time_log 
+        obj["modification_time"] = time_log 
         db.save(obj)
-	logging.info('CouchDB: '+obj['_id'] + ' ' + obj['Project_id'] + ' Created ')
+	logging.info('CouchDB: '+obj['_id'] + ' ' + obj['project_id'] + ' Created ')
     else:
         obj["_rev"] = dbobj.get("_rev")
 	del dbobj["modification_time"]
 	obj["creation_time"] = dbobj["creation_time"]
         if comp_obj(obj,dbobj)==False:    
 	    print "uppdating couchdb"
-            obj["modification_time"] = time.strftime("%x %X")
+            obj["modification_time"] = time_log 
             db.save(obj)
-	    logging.info('CouchDB: '+obj['_id'] + ' ' + obj['Project_id'] + ' Uppdated ')
+	    logging.info('CouchDB: '+obj['_id'] + ' ' + obj['project_id'] + ' Uppdated ')
 
 def comp_obj(obj,dbobj):
 	for key in dbobj:
@@ -256,16 +259,14 @@ def comp_obj(obj,dbobj):
 			return False
 	return True
 
+def find_proj_from_view(proj_db,proj_id):
+	view = proj_db.view('project/project_id')
+	for proj in view:
+		if proj.key==proj_id:
+			return proj.value
+	return None
 
 #		NAME HANDELING
-def strip_scilife_name_index(names):
-	N={}
-        for name_init in names:
-                name  = name_init.replace('-','_').split(' ')[0].split("_index")[0].strip()
-                if name !='':
-                	N[name_init]=name
-       	return N
-
 def find_duplicates(list):
 	dup=[]
         shown=[]
@@ -275,7 +276,7 @@ def find_duplicates(list):
                 shown.append(name)
 	return dup
 
-def strip_scilife_name_prep(names):
+def strip_scilife_name(names):
 	N={}
         preps = '_BCDE'
         for name_init in names:
@@ -291,6 +292,8 @@ def strip_scilife_name_prep(names):
 def  main(credentials_file,config_file, proj_ID = None):
 	client	= make_client(credentials_file)
         couch   = couchdb.Server("http://maggie.scilifelab.se:5984")
+        samp_db = couch['samples']
+        proj_db= couch['projects']
         qc      = couch['qc']
 	if proj_ID==None:
 	        feed = bcbio.google.spreadsheet.get_spreadsheets_feed(client,'20132', False)
@@ -299,17 +302,17 @@ def  main(credentials_file,config_file, proj_ID = None):
                 	        proj_ID = ssheet.title.text.split('_20132')[0].lstrip().rstrip().rstrip('_')
                         	if (proj_ID !=''):
                                 	try:
-                                        	obj = get_proj_inf(proj_ID ,qc ,credentials_file, config_file )
-                                        	if obj['Samples'].keys()!=[]:
-                                        	        save_couchdb_obj(qc, obj)
+                                        	obj = get_proj_inf(proj_ID ,qc,proj_db ,credentials_file, config_file )
+                                        	if obj['samples'].keys()!=[]:
+                                        		save_couchdb_obj(proj_db, obj)
                                 	except:
                                         	pass
         	except:
 	               	pass
 	else:
-	        obj = get_proj_inf(proj_ID ,qc ,credentials_file, config_file )
-        	if obj['Samples'].keys()!=[]:
-                	save_couchdb_obj(qc, obj)
+	        obj = get_proj_inf(proj_ID ,qc ,proj_db ,credentials_file, config_file )
+        	if obj['samples'].keys()!=[]:
+                	save_couchdb_obj(proj_db, obj)
 
 
 if __name__ == '__main__':
