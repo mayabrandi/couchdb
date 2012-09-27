@@ -25,6 +25,9 @@ def get_proj_inf(project_name_swe,samp_db,proj_db,credentials_file,config_file):
 	if not key:
 		key = uuid4().hex
 
+        logging.info(str('Handling proj '+project_name+' '+ key))
+        print key
+
         obj={   'application':'',
 		'customer_reference':'',
 		'min_m_reads_per_sample_ordered':'',
@@ -35,18 +38,15 @@ def get_proj_inf(project_name_swe,samp_db,proj_db,credentials_file,config_file):
                 'project_id': project_name, 
                 '_id': key}
 
-	logging.info(str('Handling proj '+project_name+' '+ key))
-	print key	
-
 
 	### Get minimal #M reads and uppnexid from Genomics Project list
 	print '\nGetting minimal #M reads and uppnexid from Genomics Project list for project ' + project_name_swe
 
 	config = cl.load_config(config_file)
 	p = pm.ProjectMetaData(project_name,config)
-	if p.project_name==None:
+	if p.project_name == None:
 		p = pm.ProjectMetaData(project_name_swe,config)
-	if p.project_name==None:
+	if p.project_name == None:
 		print project_name+' not found in genomics project list'
 		logging.warning(str('Google Document Genomics Project list: '+project_name+' not found')) 
 	else:
@@ -232,23 +232,22 @@ def get_column(ssheet_content,header):
 
 #		COUCHDB
 def save_couchdb_obj(db, obj):
-    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',filename='proj_coucdb.log',level=logging.INFO)
     dbobj	= db.get(obj['_id'])
     time_log 	= datetime.utcnow().isoformat() + "Z"
     if dbobj is None:
         obj["creation_time"] 	 = time_log 
         obj["modification_time"] = time_log 
         db.save(obj)
-	logging.info('CouchDB: '+obj['_id'] + ' ' + obj['project_id'] + ' Created ')
+	return 'Created'
     else:
         obj["_rev"] = dbobj.get("_rev")
 	del dbobj["modification_time"]
 	obj["creation_time"] = dbobj["creation_time"]
         if comp_obj(obj,dbobj)==False:    
-	    print "uppdating couchdb"
             obj["modification_time"] = time_log 
             db.save(obj)
-	    logging.info('CouchDB: '+obj['_id'] + ' ' + obj['project_id'] + ' Uppdated ')
+	    return 'Uppdated'
+    return None 
 
 def comp_obj(obj,dbobj):
 	for key in dbobj:
@@ -292,10 +291,10 @@ def strip_scilife_name(names):
 def  main(credentials_file,config_file, proj_ID = None):
 	client	= make_client(credentials_file)
         couch   = couchdb.Server("http://maggie.scilifelab.se:5984")
-        samp_db = couch['samples']
-        proj_db= couch['projects']
+#       samp_db = couch['samples']
+        proj_db = couch['projects']
         qc      = couch['qc']
-	if proj_ID==None:
+	if proj_ID == None:
 	        feed = bcbio.google.spreadsheet.get_spreadsheets_feed(client,'20132', False)
 	        try:
         	        for ssheet in feed.entry:
@@ -304,7 +303,7 @@ def  main(credentials_file,config_file, proj_ID = None):
                                 	try:
                                         	obj = get_proj_inf(proj_ID ,qc,proj_db ,credentials_file, config_file )
                                         	if obj['samples'].keys()!=[]:
-                                        		save_couchdb_obj(proj_db, obj)
+                                        		info =	save_couchdb_obj(proj_db, obj)
                                 	except:
                                         	pass
         	except:
@@ -312,7 +311,11 @@ def  main(credentials_file,config_file, proj_ID = None):
 	else:
 	        obj = get_proj_inf(proj_ID ,qc ,proj_db ,credentials_file, config_file )
         	if obj['samples'].keys()!=[]:
-                	save_couchdb_obj(proj_db, obj)
+                	info = save_couchdb_obj(proj_db, obj)
+	if info:
+		print 'couchdb '+info
+        	logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',filename='proj_coucdb.log',level=logging.INFO)
+		logging.info('CouchDB: '+obj['_id'] + ' ' + obj['project_id'] + ' ' +info)
 
 
 if __name__ == '__main__':
