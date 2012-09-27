@@ -2,6 +2,21 @@
 """
 ProjectSummaryUploadV2
 Created by Maya Brandi on 2012-09-00.
+
+Creates and updates project_summary documents in the projects database on couchdb. 
+Finds projects by looping through the 20132 documents on google docs.
+
+Sources of the fields in project_summary:
+google docs:
+	Document 20132: 
+		project_id, scilife_name (samples), customer_name (samples) 
+	Genomics project list: 
+		min_m_reads_per_sample_ordered, application, customer_reference, uppnex_id, no_of_samples
+	Document 20158:
+		status (samples), m_reads_sequenced (samples)
+couchdb:
+	samples:
+		sample_run_metrics
 """
 from uuid import uuid4
 import bcbio.google
