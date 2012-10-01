@@ -184,26 +184,18 @@ def get_proj_inf(project_name_swe,samp_db,proj_db,credentials_file,config_file):
                 pass
 
 
-	### Get _id for SampleQCMetrics and bcbb names -- use couchdb views instead.... To be fixed...
-	print '\nGetting _id for SampleQCMetrics'
+	### Get _id for sample_run_metrics and bcbb names -- use couchdb views instead.... To be fixed...
+	print '\nGetting _id for sample_run_metrics'
 
-	info={}
-        for key in samp_db:
-		SampQC = samp_db.get(key)
-                if SampQC.has_key("entity_type"):
-                        if (SampQC["entity_type"] == "SampleQCMetrics") & SampQC.has_key("sample_prj"):
-                                if SampQC["sample_prj"] == project_name:
-					info[SampQC["_id"]]=[str(SampQC["name"]).strip(),SampQC["barcode_name"]]
+	info	= find_samp_from_view(samp_db,project_name)
 
 	if len(info.keys())>0:
-		print 'SampleQCMetrics found on couchdb for the folowing samples:'
-		print info.values()
+		print 'sample_run_metrics found on couchdb for project '+ project_name
 	else:
-		print 'no SampleQCMetrics found on couchdb for project '+ project_name
-		logging.warning(str('CouchDB: No SampleQCMetrics found for project '+ project_name))
-
+		print 'no sample_run_metrics found on couchdb for project '+ project_name
+		logging.warning(str('CouchDB: No sample_run_metrics found for project '+ project_name))
         for key in info:
-        	scilife_name=strip_scilife_name([info[key][1]])[info[key][1]]
+        	scilife_name = strip_scilife_name([info[key][1]])[info[key][1]]
                 if obj['samples'].has_key(scilife_name):
         		if obj['samples'][scilife_name].has_key("sample_run_metrics"):
                 		obj['samples'][scilife_name]["sample_run_metrics"][info[key][0]]=key
@@ -280,6 +272,15 @@ def find_proj_from_view(proj_db,proj_id):
 			return proj.value
 	return None
 
+def find_samp_from_view(samp_db,proj_id):
+        view = samp_db.view('names/id_to_proj')
+	samps={}
+        for doc in view:
+                if doc.value[0]==proj_id:
+			samps[doc.key]=doc.value[1:3]
+        return samps
+
+
 #		NAME HANDELING
 def find_duplicates(list):
 	dup=[]
@@ -305,10 +306,10 @@ def strip_scilife_name(names):
 
 def  main(credentials_file,config_file, proj_ID = None):
 	client	= make_client(credentials_file)
-        couch   = couchdb.Server("http://maggie.scilifelab.se:5984")
-#       samp_db = couch['samples']
+	couch   = couchdb.Server("http://maggie.scilifelab.se:5984")
+       	samp_db = couch['samples']
         proj_db = couch['projects']
-        qc      = couch['qc']
+	info	= None
 	if proj_ID == None:
 	        feed = bcbio.google.spreadsheet.get_spreadsheets_feed(client,'20132', False)
 	        try:
@@ -316,7 +317,7 @@ def  main(credentials_file,config_file, proj_ID = None):
                 	        proj_ID = ssheet.title.text.split('_20132')[0].lstrip().rstrip().rstrip('_')
                         	if (proj_ID !=''):
                                 	try:
-                                        	obj = get_proj_inf(proj_ID ,qc,proj_db ,credentials_file, config_file )
+                                        	obj = get_proj_inf(proj_ID ,samp_db,proj_db ,credentials_file, config_file )
                                         	if obj['samples'].keys()!=[]:
                                         		info =	save_couchdb_obj(proj_db, obj)
                                 	except:
@@ -324,7 +325,7 @@ def  main(credentials_file,config_file, proj_ID = None):
         	except:
 	               	pass
 	else:
-	        obj = get_proj_inf(proj_ID ,qc ,proj_db ,credentials_file, config_file )
+	        obj = get_proj_inf(proj_ID ,samp_db ,proj_db ,credentials_file, config_file )
         	if obj['samples'].keys()!=[]:
                 	info = save_couchdb_obj(proj_db, obj)
 	if info:
