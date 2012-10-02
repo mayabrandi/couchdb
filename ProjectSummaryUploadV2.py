@@ -65,9 +65,11 @@ def get_proj_inf(project_name_swe,samp_db,proj_db,credentials_file,config_file):
 		print project_name+' not found in genomics project list'
 		logging.warning(str('Google Document Genomics Project list: '+project_name+' not found')) 
 	else:
-                obj['min_m_reads_per_sample_ordered'] = float(p.min_reads_per_sample)
+		if p.min_reads_per_sample.strip() !='':
+                	obj['min_m_reads_per_sample_ordered'] = float(p.min_reads_per_sample)
+		if p.no_samples.strip() !='':
+			obj['no_of_samples'] = int(p.no_samples)
                 obj['uppnex_id']                      = p.uppnex_id
-                obj['no_of_samples']                  = int(p.no_samples)
 		obj['application']		      = p.application
 		obj['customer_reference']             = p.customer_reference
 
@@ -121,24 +123,20 @@ def get_proj_inf(project_name_swe,samp_db,proj_db,credentials_file,config_file):
 	### Get Sample Status from _20158_01_Table for QA HiSeq2000 sequencing results for samples
 	print '\nGetting Sample Status from '+project_name_swe+'_20158_0X_Table for QA HiSeq2000 sequencing results for samples'
 
-        versions = {    "01":['Sample name Scilife',"Total reads per sample","Passed=P/ not passed=NP*"],
-                        "02":["Sample name (SciLifeLab)","Total number of reads (Millions)","Based on total number of reads"],
-                        "03":["Sample name (SciLifeLab)","Total number of reads (Millions)","Based on total number of reads"]}
+        versions = {    "01":['Sample name Scilife',"Total reads per sample","Passed=P/ not passed=NP*",'Sample name from customer'],
+                        "02":["Sample name (SciLifeLab)","Total number of reads (Millions)","Based on total number of reads",'Sample name (customer)'],
+                        "03":["Sample name (SciLifeLab)","Total number of reads (Millions)","Based on total number of reads",'Sample name (customer)']}
 
         # Load google document
 	mistakes = ["_"," _"," ",""]
 	found='FALSE'
 	for m in mistakes:
 		feed    = bcbio.google.spreadsheet.get_spreadsheets_feed(client,project_name_swe + m + '20158', False)
-        	if len(feed.entry) == 0:
-                	ssheet=None
-                	print "Could not find spreadsheet"
-		else:
-			ssheet  = feed.entry[0].title.text
-			version = ssheet.split(str(m+'20158_'))[1].split(' ')[0].split('_')[0]	
-	        	wsheet = "Sheet1"
+        	if len(feed.entry) != 0:
 			try:
-				content, ws_key, ss_key = get_google_document(ssheet,wsheet,credentials_file)
+				ssheet  = feed.entry[0].title.text
+				version = ssheet.split(str(m+'20158_'))[1].split(' ')[0].split('_')[0]	
+				content, ws_key, ss_key = get_google_document(ssheet,"Sheet1",credentials_file)
 				found='TRUE'
 				break
                 	except:
@@ -153,30 +151,41 @@ def get_proj_inf(project_name_swe,samp_db,proj_db,credentials_file,config_file):
 	try:
 		dummy, P_NP_colindex 			= get_column(content,versions[version][2])
 		dummy, No_reads_sequenced_colindex 	= get_column(content,versions[version][1])
+		dummy, customer_names_colindex          = get_column(content,versions[version][3])
         	row_ind, scilife_names_colindex 	= get_column(content,versions[version][0])
 		info={}
                 for j,row in enumerate(content):
 			if ( j > row_ind ):
 				try:
                                         sci_name=str(row[scilife_names_colindex]).strip()
+					cust_name=str(row[customer_names_colindex]).strip()
                                         no_reads=str(row[No_reads_sequenced_colindex]).strip()
                                         if sci_name[-1]=='F':
                                                 status='P'
                                         else:
-                                                status=str(row[P_NP_colindex]).strip()
-                                        info[sci_name]=[status,no_reads]
+                                                status	=str(row[P_NP_colindex]).strip()
+                                        info[sci_name]	=[status,no_reads,cust_name]
 				except:
 					pass
 		scilife_names 	= strip_scilife_name(info.keys())
 		duplicates	= find_duplicates(scilife_names.values())
 		for key in scilife_names:
-			striped_scilife_name = scilife_names[key]
+			striped_scilife_name 	= scilife_names[key]
+			status			= info[key][0]
+			m_reads			= info[key][1]
+			cust_name		= info[key][2]
+			if striped_scilife_name in duplicates:
+                                        status 	= 'inconsistent'
+					m_reads	= 'inconsistent'
 			try:
-				if striped_scilife_name in duplicates:
-					obj['samples'][striped_scilife_name] = {'status':'inconsistent','m_reads_sequenced':'inconsistent'}
-                		elif obj['samples'].has_key(striped_scilife_name):
-                        		obj['samples'][striped_scilife_name]['status']            = info[key][0]
-                        	        obj['samples'][striped_scilife_name]['m_reads_sequenced'] = info[key][1]
+                		if obj['samples'].has_key(striped_scilife_name):
+                        		obj['samples'][striped_scilife_name]['status']            = status
+                        	        obj['samples'][striped_scilife_name]['m_reads_sequenced'] = m_reads
+				else:
+					obj['samples'][striped_scilife_name]=	{'customer_name': cust_name, 
+										'scilife_name':striped_scilife_name,
+										'status':status,
+										'm_reads_sequenced':m_reads}
 			except:
 				pass
         except:
@@ -310,20 +319,19 @@ def  main(credentials_file,config_file, proj_ID = None):
        	samp_db = couch['samples']
         proj_db = couch['projects']
 	info	= None
-	if proj_ID == None:
-	        feed = bcbio.google.spreadsheet.get_spreadsheets_feed(client,'20132', False)
-	        try:
-        	        for ssheet in feed.entry:
-                	        proj_ID = ssheet.title.text.split('_20132')[0].lstrip().rstrip().rstrip('_')
-                        	if (proj_ID !=''):
-                                	try:
-                                        	obj = get_proj_inf(proj_ID ,samp_db,proj_db ,credentials_file, config_file )
-                                        	if obj['samples'].keys()!=[]:
-                                        		info =	save_couchdb_obj(proj_db, obj)
-                                	except:
-                                        	pass
-        	except:
-	               	pass
+	
+        if proj_ID == None:
+		content, ws_key, ss_key = get_google_document("Genomics Project list","Ongoing",credentials_file)	
+		row_ind, col_ind = get_column(content,'Project name')
+		for j,row in enumerate(content):
+      			try:
+	        		proj_ID = str(row[col_ind]).strip().split(' ')[0]
+				if (proj_ID !='') & (j>row_ind+2):
+                       			obj     = get_proj_inf(proj_ID ,samp_db,proj_db ,credentials_file, config_file)
+        				if obj['samples'].keys()!=[]:
+                				info =  save_couchdb_obj(proj_db, obj)
+			except:
+				pass		
 	else:
 	        obj = get_proj_inf(proj_ID ,samp_db ,proj_db ,credentials_file, config_file )
         	if obj['samples'].keys()!=[]:
@@ -335,8 +343,11 @@ def  main(credentials_file,config_file, proj_ID = None):
 
 
 if __name__ == '__main__':
-	credentials_file = '/bubo/home/h24/mayabr/config/gdocs_credentials'
-	config_file='/bubo/home/h24/mayabr/config/post_process.yaml'
+	credentials_file = os.path.join(os.environ['HOME'],'opt/config/gdocs_credentials')
+	config_file	 = os.path.join(os.environ['HOME'],'opt/config/post_process.yaml')
+
+#	credentials_file = '/bubo/home/h24/mayabr/config/gdocs_credentials'
+#	config_file='/bubo/home/h24/mayabr/config/post_process.yaml'
 	if len(sys.argv)>1:
 		main(credentials_file,config_file,sys.argv[1])
 	else:
